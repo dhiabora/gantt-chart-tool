@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { isSupabaseEnabled, supabase, supabaseConfigError } from './lib/supabaseClient';
+import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
 // --- Icons (Inline SVG to avoid dependency issues) ---
 const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14"/></svg>;
@@ -29,6 +29,13 @@ const getRowHeight = (task) => {
   if (!text) return 80;
   const lineCount = Math.ceil(text.length / 24);
   return Math.max(80, 80 + lineCount * 14);
+};
+const getSupabaseConfigError = () => {
+  const url = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+  const anon = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
+  if (!url || !anon) return 'Supabase環境変数が未設定です。';
+  if (!/^https?:\/\/.+/i.test(url)) return 'VITE_SUPABASE_URL が不正です。https:// から始まるURLを設定してください。';
+  return '';
 };
 
 const App = () => {
@@ -143,6 +150,7 @@ const App = () => {
   const [authError, setAuthError] = useState('');
   const [authInfo, setAuthInfo] = useState('');
   const [fatalError, setFatalError] = useState('');
+  const supabaseConfigError = getSupabaseConfigError();
 
   const chartRef = useRef(null);
   const dragTaskRef = useRef(null);
