@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
 
 // --- Icons (Inline SVG to avoid dependency issues) ---
 const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14"/></svg>;
@@ -23,6 +24,12 @@ const addMonths = (date, n) => {
   return result;
 };
 const getDaysInMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+const getRowHeight = (task) => {
+  const text = task?.description ?? '';
+  if (!text) return 80;
+  const lineCount = Math.ceil(text.length / 24);
+  return Math.max(80, 80 + lineCount * 14);
+};
 
 const App = () => {
   const STORAGE_KEY = 'gantt_state_v1';
@@ -128,9 +135,18 @@ const App = () => {
   const [newTask, setNewTask] = useState({ name: '', assignee: '', description: '', start: formatDate(new Date()), end: formatDate(addDays(new Date(), 7)), progress: 0, color: '#3b82f6' });
   const [newProjectName, setNewProjectName] = useState('');
   const [renameProjectName, setRenameProjectName] = useState('');
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseEnabled);
+  const [authMode, setAuthMode] = useState('signin'); // 'signin' | 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authInfo, setAuthInfo] = useState('');
 
   const chartRef = useRef(null);
   const dragTaskRef = useRef(null);
+  const syncTimerRef = useRef(null);
+  const userId = session?.user?.id ?? null;
 
   const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
   const weekendBg = '#f1f5f9'; // 薄いグレー（休日が分かりやすいように）
@@ -143,6 +159,147 @@ const App = () => {
       // 保存失敗時は握りつぶし（ユーザー体験を壊さない）
     }
   }, [projects, tasks, activeProjectId]);
+
+  // Supabase Auth セッション監視
+  useEffect(() => {
+    if (!isSupabaseEnabled || !supabase) return;
+
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSession(data.session ?? null);
+      setAuthLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession ?? null);
+      if (!nextSession) {
+        setProjects([{ id: 'p_default', name: 'デフォルト' }]);
+        setTasks([]);
+        setActiveProjectId('p_default');
+      }
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  // Supabaseが有効な場合、初回にDBの内容を読み込む
+  useEffect(() => {
+    if (!isSupabaseEnabled || !supabase || !userId) return;
+
+    let isMounted = true;
+    const loadFromSupabase = async () => {
+      const { data: projectRows, error: projectError } = await supabase
+        .from('projects')
+        .select('id, name, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+
+      const { data: taskRows, error: taskError } = await supabase
+        .from('tasks')
+        .select('id, project_id, name, assignee, description, start_date, end_date, progress, color, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+
+      if (!isMounted || projectError || taskError || !projectRows || !taskRows) return;
+      if (!projectRows.length) return;
+
+      const dbProjects = projectRows.map((p) => ({ id: String(p.id), name: String(p.name ?? '') }));
+      const dbTasks = taskRows.map((t) => ({
+        id: String(t.id),
+        projectId: String(t.project_id),
+        name: String(t.name ?? ''),
+        assignee: String(t.assignee ?? ''),
+        description: String(t.description ?? ''),
+        start: String(t.start_date ?? ''),
+        end: String(t.end_date ?? ''),
+        progress: Number.parseInt(t.progress, 10) || 0,
+        color: String(t.color ?? '#3b82f6'),
+      }));
+
+      setProjects(dbProjects);
+      setTasks(dbTasks);
+      setActiveProjectId((prev) => (dbProjects.some((p) => p.id === prev) ? prev : dbProjects[0].id));
+    };
+
+    loadFromSupabase();
+    return () => {
+      isMounted = false;
+    };
+  }, [userId]);
+
+  // Supabaseが有効な場合、変更をDBへ同期（ドラッグ連打を考慮して少し遅延）
+  useEffect(() => {
+    if (!isSupabaseEnabled || !supabase || !userId) return;
+
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(async () => {
+      const projectPayload = projects.map((p) => ({ id: p.id, name: p.name }));
+      const taskPayload = tasks.map((t) => ({
+        id: t.id,
+        project_id: t.projectId,
+        name: t.name,
+        assignee: t.assignee,
+        description: t.description ?? '',
+        start_date: t.start,
+        end_date: t.end,
+        progress: Number.parseInt(t.progress, 10) || 0,
+        color: t.color,
+      }));
+
+      const projectPayloadWithOwner = projectPayload.map((p) => ({ ...p, user_id: userId }));
+      const taskPayloadWithOwner = taskPayload.map((t) => ({ ...t, user_id: userId }));
+
+      await supabase.from('projects').upsert(projectPayloadWithOwner, { onConflict: 'id' });
+      await supabase.from('tasks').upsert(taskPayloadWithOwner, { onConflict: 'id' });
+    }, 700);
+
+    return () => {
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    };
+  }, [projects, tasks, userId]);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthInfo('');
+    if (!supabase) return;
+
+    if (!authEmail || !authPassword) {
+      setAuthError('メールアドレスとパスワードを入力してください。');
+      return;
+    }
+
+    if (authMode === 'signin') {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) {
+        setAuthError(error.message);
+      }
+      return;
+    }
+
+    const { error } = await supabase.auth.signUp({
+      email: authEmail,
+      password: authPassword,
+    });
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+    setAuthInfo('サインアップに成功しました。メール確認後にログインしてください。');
+    setAuthMode('signin');
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  };
 
   const handleTaskDragStart = (e, task) => {
     // 左クリックのみ（ボタンプロパティがある場合）
@@ -333,6 +490,44 @@ const App = () => {
     };
   };
 
+  if (isSupabaseEnabled && authLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', backgroundColor: '#f8fafc' }}>
+        <div style={{ color: '#64748b' }}>認証状態を確認中...</div>
+      </div>
+    );
+  }
+
+  if (isSupabaseEnabled && !session) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', backgroundColor: '#f8fafc', padding: '20px' }}>
+        <div style={{ width: '100%', maxWidth: '420px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
+          <h2 style={{ marginTop: 0, marginBottom: '16px' }}>ログイン</h2>
+          <form onSubmit={handleAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <input type="email" placeholder="メールアドレス" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #e2e8f0' }} />
+            <input type="password" placeholder="パスワード" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #e2e8f0' }} />
+            {authError && <div style={{ color: '#dc2626', fontSize: '12px' }}>{authError}</div>}
+            {authInfo && <div style={{ color: '#0f766e', fontSize: '12px' }}>{authInfo}</div>}
+            <button type="submit" style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+              {authMode === 'signin' ? 'ログイン' : 'サインアップ'}
+            </button>
+          </form>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthError('');
+              setAuthInfo('');
+              setAuthMode((prev) => (prev === 'signin' ? 'signup' : 'signin'));
+            }}
+            style={{ marginTop: '12px', background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', padding: 0 }}
+          >
+            {authMode === 'signin' ? 'アカウント新規作成はこちら' : 'ログイン画面に戻る'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif', backgroundColor: '#f8fafc', minHeight: '100vh', padding: '20px' }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -343,6 +538,14 @@ const App = () => {
             <h1 style={{ fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
               <IconLayout /> プロジェクト管理
             </h1>
+            {isSupabaseEnabled && session?.user?.email && (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>{session.user.email}</span>
+                <button type="button" onClick={handleSignOut} style={{ border: 'none', background: 'none', color: '#2563eb', cursor: 'pointer', padding: 0 }}>
+                  ログアウト
+                </button>
+              </div>
+            )}
             <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 'bold' }}>プロジェクト</span>
               <select
@@ -414,7 +617,7 @@ const App = () => {
                 <div
                   key={t.id}
                   onClick={() => openEditTaskModal(t)}
-                  style={{ height: '80px', borderBottom: '1px solid #f1f5f9', padding: '10px 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center', cursor: 'pointer' }}
+                  style={{ height: `${getRowHeight(t)}px`, borderBottom: '1px solid #f1f5f9', padding: '10px 15px', display: 'flex', flexDirection: 'column', justifyContent: 'center', cursor: 'pointer' }}
                 >
                   <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>担当: {t.assignee} | {t.progress}%</div>
@@ -425,9 +628,9 @@ const App = () => {
                         color: '#111827',
                         fontWeight: '500',
                         marginTop: '2px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'anywhere',
+                        lineHeight: 1.35,
                       }}
                       title={t.description}
                     >
@@ -477,7 +680,7 @@ const App = () => {
                 </div>
                 {/* Bars */}
                 {visibleTasks.map(t => (
-                  <div key={t.id} style={{ height: '80px', borderBottom: '1px solid #f1f5f9', position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <div key={t.id} style={{ height: `${getRowHeight(t)}px`, borderBottom: '1px solid #f1f5f9', position: 'relative', display: 'flex', alignItems: 'center' }}>
                     <div
                       style={{ ...getBarStyle(t), cursor: 'grab' }}
                       onPointerDown={(e) => handleTaskDragStart(e, t)}
