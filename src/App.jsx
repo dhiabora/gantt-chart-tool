@@ -31,10 +31,10 @@ const App = () => {
   const defaultProjects = [{ id: 'p_default', name: 'デフォルト' }];
 
   const defaultTasks = [
-    { id: '1', projectId: 'p_default', name: '要件定義', assignee: '田中', start: '2026-03-01', end: '2026-03-10', progress: 100, color: '#3b82f6' },
-    { id: '2', projectId: 'p_default', name: 'デザイン制作', assignee: '佐藤', start: '2026-03-11', end: '2026-03-25', progress: 60, color: '#6366f1' },
-    { id: '3', projectId: 'p_default', name: 'フロント開発', assignee: '鈴木', start: '2026-03-20', end: '2026-04-15', progress: 20, color: '#10b981' },
-    { id: '4', projectId: 'p_default', name: 'バックエンド開発', assignee: '高橋', start: '2026-03-25', end: '2026-04-30', progress: 0, color: '#f59e0b' },
+    { id: '1', projectId: 'p_default', name: '要件定義', assignee: '田中', description: '要件ヒアリングと機能一覧の確定。', start: '2026-03-01', end: '2026-03-10', progress: 100, color: '#3b82f6' },
+    { id: '2', projectId: 'p_default', name: 'デザイン制作', assignee: '佐藤', description: '画面遷移と主要ページのUI設計。', start: '2026-03-11', end: '2026-03-25', progress: 60, color: '#6366f1' },
+    { id: '3', projectId: 'p_default', name: 'フロント開発', assignee: '鈴木', description: 'Reactで画面実装と状態管理を構築。', start: '2026-03-20', end: '2026-04-15', progress: 20, color: '#10b981' },
+    { id: '4', projectId: 'p_default', name: 'バックエンド開発', assignee: '高橋', description: 'API設計とデータ連携基盤の実装。', start: '2026-03-25', end: '2026-04-30', progress: 0, color: '#f59e0b' },
   ];
 
   const loadStateFromLocalStorage = () => {
@@ -67,6 +67,7 @@ const App = () => {
               projectId: String(t.projectId ?? fallbackProjectId ?? 'p_default'),
               name: String(t.name ?? ''),
               assignee: String(t.assignee ?? ''),
+              description: String(t.description ?? ''),
               start: String(t.start ?? ''),
               end: String(t.end ?? ''),
               progress: Number.isFinite(Number(t.progress)) ? Number(parseInt(t.progress, 10) || 0) : 0,
@@ -91,6 +92,7 @@ const App = () => {
                 projectId: 'p_default',
                 name: String(t.name ?? ''),
                 assignee: String(t.assignee ?? ''),
+                description: String(t.description ?? ''),
                 start: String(t.start ?? ''),
                 end: String(t.end ?? ''),
                 progress: Number.isFinite(Number(t.progress)) ? Number(parseInt(t.progress, 10) || 0) : 0,
@@ -123,7 +125,7 @@ const App = () => {
   const [isProjectRenameOpen, setIsProjectRenameOpen] = useState(false);
   const [taskFormMode, setTaskFormMode] = useState('create'); // 'create' | 'edit'
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const [newTask, setNewTask] = useState({ name: '', assignee: '', start: formatDate(new Date()), end: formatDate(addDays(new Date(), 7)), progress: 0, color: '#3b82f6' });
+  const [newTask, setNewTask] = useState({ name: '', assignee: '', description: '', start: formatDate(new Date()), end: formatDate(addDays(new Date(), 7)), progress: 0, color: '#3b82f6' });
   const [newProjectName, setNewProjectName] = useState('');
   const [renameProjectName, setRenameProjectName] = useState('');
 
@@ -217,6 +219,7 @@ const App = () => {
     setNewTask({
       name: '',
       assignee: '',
+      description: '',
       start: formatDate(new Date()),
       end: formatDate(addDays(new Date(), 7)),
       progress: 0,
@@ -231,6 +234,7 @@ const App = () => {
     setNewTask({
       name: task.name,
       assignee: task.assignee,
+      description: task.description ?? '',
       start: task.start,
       end: task.end,
       progress: task.progress,
@@ -276,7 +280,7 @@ const App = () => {
     if (taskFormMode === 'create') {
       setTasks((prev) => [
         ...prev,
-        { ...newTask, id: Date.now().toString(), projectId: activeProjectId },
+        { ...newTask, description: (newTask.description ?? '').slice(0, 150), id: Date.now().toString(), projectId: activeProjectId },
       ]);
     } else {
       setTasks((prev) =>
@@ -286,6 +290,7 @@ const App = () => {
                 ...t,
                 name: newTask.name,
                 assignee: newTask.assignee,
+                description: (newTask.description ?? '').slice(0, 150),
                 start: newTask.start,
                 end: newTask.end,
                 // progress/color も維持（フォームに出していない場合でも正しい値が残る）
@@ -413,6 +418,21 @@ const App = () => {
                 >
                   <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>担当: {t.assignee} | {t.progress}%</div>
+                  {t.description && (
+                    <div
+                      style={{
+                        fontSize: '10px',
+                        color: '#94a3b8',
+                        marginTop: '2px',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                      title={t.description}
+                    >
+                      {t.description}
+                    </div>
+                  )}
                   <input
                     type="range"
                     value={t.progress}
@@ -521,6 +541,18 @@ const App = () => {
               <form onSubmit={saveTask} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                 <input type="text" placeholder="タスク名" required value={newTask.name} onChange={e => setNewTask({...newTask, name: e.target.value})} style={{ padding: '8px', borderRadius: '5px', border: '1px solid #e2e8f0' }} />
                 <input type="text" placeholder="担当者" value={newTask.assignee} onChange={e => setNewTask({...newTask, assignee: e.target.value})} style={{ padding: '8px', borderRadius: '5px', border: '1px solid #e2e8f0' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <textarea
+                    placeholder="タスク内容（150文字以内）"
+                    maxLength={150}
+                    value={newTask.description}
+                    onChange={e => setNewTask({...newTask, description: e.target.value})}
+                    style={{ resize: 'vertical', minHeight: '70px', padding: '8px', borderRadius: '5px', border: '1px solid #e2e8f0', fontFamily: 'inherit' }}
+                  />
+                  <div style={{ fontSize: '11px', color: '#94a3b8', textAlign: 'right' }}>
+                    {newTask.description.length}/150
+                  </div>
+                </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   <input type="date" value={newTask.start} onChange={e => setNewTask({...newTask, start: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #e2e8f0' }} />
                   <input type="date" value={newTask.end} onChange={e => setNewTask({...newTask, end: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #e2e8f0' }} />
