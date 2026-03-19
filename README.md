@@ -1,16 +1,56 @@
-# React + Vite
+# ガントチャートツール（プロジェクト管理）
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite で作った、シンプルなプロジェクト管理（ガントチャート）ツールです。
 
-Currently, two official plugins are available:
+## 公開URL（GitHub Pages）
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `（ https://dhiabora.github.io/gantt-chart-tool/）`
 
-## React Compiler
+## 主な機能
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **プロジェクト追加/切り替え**
+- **タスク追加**
+- **タスク編集**（左側のタスクカードをクリック）
+- **開始日のドラッグ移動**（タイムライン上のタスクバーを左右にドラッグ）
+- **進捗更新**（スライダー）
+- **土日列の背景を薄いグレーで表示**
+- **LocalStorage保存**（リロードしてもデータが消えない）
 
-## Expanding the ESLint configuration
+## 使い方
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- **タスクを追加**: 右上の「タスク追加」
+- **タスクを編集**: 左のタスク一覧のカードをクリック → 「更新する」
+- **開始日を動かす**: タスクバーを左右にドラッグ（開始日/終了日を同じ日数だけスライド）
+- **プロジェクトを追加**: 「プロジェクト追加」
+- **プロジェクト切り替え**: 画面上部のプロジェクト選択ドロップダウン
+
+## 開発（ローカル）
+
+```bash
+npm install
+npm run dev
+```
+
+## ビルド
+
+```bash
+npm run build
+```
+
+生成物は `dist/` に出力されます。
+
+## デプロイ（GitHub Pages）
+
+- `.github/workflows/deploy.yml` で GitHub Actions から `npm ci` → `npm run build` → `dist/` を Pages にデプロイします。
+- `Settings` → `Pages` → `Source` は **GitHub Actions** を選択してください。
+
+## データ保存について（LocalStorage）
+
+このツールはサーバーを持たず、ブラウザの `LocalStorage` にデータを保存します。
+別PC/別ブラウザ/シークレットモードではデータが共有されません。
+
+## セキュリティ注意
+
+- **機密情報を入れない**: LocalStorage はブラウザ内に平文で保存されます（同一PCの別ユーザー/マルウェア/拡張機能等の影響を受ける可能性があります）。
+- **XSSに注意**: 現状はユーザー入力をHTMLとして描画していませんが、将来 `dangerouslySetInnerHTML` 等を使う場合は特に注意してください。
+- **共有端末に注意**: 共有PCだとデータが残ります。必要なら「データ削除」機能の追加を推奨します。

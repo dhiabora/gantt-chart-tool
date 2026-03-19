@@ -15,6 +15,14 @@ const addDays = (date, days) => {
   return result;
 };
 const diffDays = (d1, d2) => Math.ceil((d2 - d1) / (1000 * 60 * 60 * 24));
+// 月単位ナビ用
+const getFirstDayOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+const addMonths = (date, n) => {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + n);
+  return result;
+};
+const getDaysInMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
 
 const App = () => {
   const STORAGE_KEY = 'gantt_state_v1';
@@ -23,10 +31,10 @@ const App = () => {
   const defaultProjects = [{ id: 'p_default', name: 'デフォルト' }];
 
   const defaultTasks = [
-    { id: '1', projectId: 'p_default', name: '要件定義', assignee: '田中', start: '2024-03-01', end: '2024-03-10', progress: 100, color: '#3b82f6' },
-    { id: '2', projectId: 'p_default', name: 'デザイン制作', assignee: '佐藤', start: '2024-03-11', end: '2024-03-25', progress: 60, color: '#6366f1' },
-    { id: '3', projectId: 'p_default', name: 'フロント開発', assignee: '鈴木', start: '2024-03-20', end: '2024-04-15', progress: 20, color: '#10b981' },
-    { id: '4', projectId: 'p_default', name: 'バックエンド開発', assignee: '高橋', start: '2024-03-25', end: '2024-04-30', progress: 0, color: '#f59e0b' },
+    { id: '1', projectId: 'p_default', name: '要件定義', assignee: '田中', start: '2026-03-01', end: '2026-03-10', progress: 100, color: '#3b82f6' },
+    { id: '2', projectId: 'p_default', name: 'デザイン制作', assignee: '佐藤', start: '2026-03-11', end: '2026-03-25', progress: 60, color: '#6366f1' },
+    { id: '3', projectId: 'p_default', name: 'フロント開発', assignee: '鈴木', start: '2026-03-20', end: '2026-04-15', progress: 20, color: '#10b981' },
+    { id: '4', projectId: 'p_default', name: 'バックエンド開発', assignee: '高橋', start: '2026-03-25', end: '2026-04-30', progress: 0, color: '#f59e0b' },
   ];
 
   const loadStateFromLocalStorage = () => {
@@ -107,14 +115,17 @@ const App = () => {
   const [tasks, setTasks] = useState(initialState.tasks);
   const [activeProjectId, setActiveProjectId] = useState(initialState.activeProjectId);
 
-  const [viewStart, setViewStart] = useState(new Date('2024-03-01'));
-  const [daysToShow] = useState(60);
+  // 表示は月単位・デフォルト2026年1月
+  const [viewStart, setViewStart] = useState(() => getFirstDayOfMonth(new Date(2026, 0, 1)));
+  const daysToShow = useMemo(() => getDaysInMonth(viewStart), [viewStart]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
+  const [isProjectRenameOpen, setIsProjectRenameOpen] = useState(false);
   const [taskFormMode, setTaskFormMode] = useState('create'); // 'create' | 'edit'
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [newTask, setNewTask] = useState({ name: '', assignee: '', start: formatDate(new Date()), end: formatDate(addDays(new Date(), 7)), progress: 0, color: '#3b82f6' });
   const [newProjectName, setNewProjectName] = useState('');
+  const [renameProjectName, setRenameProjectName] = useState('');
 
   const chartRef = useRef(null);
   const dragTaskRef = useRef(null);
@@ -233,6 +244,12 @@ const App = () => {
     setIsProjectFormOpen(true);
   };
 
+  const openRenameProjectModal = () => {
+    const current = projects.find((p) => p.id === activeProjectId);
+    setRenameProjectName(current?.name ?? '');
+    setIsProjectRenameOpen(true);
+  };
+
   const saveProject = (e) => {
     e.preventDefault();
     const name = newProjectName.trim();
@@ -242,6 +259,15 @@ const App = () => {
     setProjects((prev) => [...prev, { id, name }]);
     setActiveProjectId(id);
     setIsProjectFormOpen(false);
+  };
+
+  const saveProjectRename = (e) => {
+    e.preventDefault();
+    const name = renameProjectName.trim();
+    if (!name) return;
+
+    setProjects((prev) => prev.map((p) => (p.id === activeProjectId ? { ...p, name } : p)));
+    setIsProjectRenameOpen(false);
   };
 
   const saveTask = (e) => {
@@ -331,6 +357,12 @@ const App = () => {
               >
                 プロジェクト追加
               </button>
+              <button
+                onClick={openRenameProjectModal}
+                style={{ background: 'white', color: '#0f766e', border: '1px solid #0f766e', padding: '8px 12px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                名前変更
+              </button>
             </div>
           </div>
           <button onClick={openCreateTaskModal} style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -341,12 +373,30 @@ const App = () => {
         {/* Gantt Container */}
         <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           
-          {/* Navigation */}
-          <div style={{ padding: '15px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px', backgroundColor: '#fdfdfd' }}>
-            <button onClick={() => setViewStart(addDays(viewStart, -7))} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px', borderRadius: '5px', cursor: 'pointer' }}><IconChevronLeft /></button>
-            <button onClick={() => setViewStart(new Date())} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px 15px', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>今日</button>
-            <button onClick={() => setViewStart(addDays(viewStart, 7))} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px', borderRadius: '5px', cursor: 'pointer' }}><IconChevronRight /></button>
-            <span style={{ fontSize: '14px', color: '#64748b', marginLeft: '10px' }}>{formatDate(viewStart)} 〜</span>
+          {/* Navigation（月単位・年/月選択） */}
+          <div style={{ padding: '15px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px', backgroundColor: '#fdfdfd', flexWrap: 'wrap' }}>
+            <button onClick={() => setViewStart(getFirstDayOfMonth(addMonths(viewStart, -1)))} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px', borderRadius: '5px', cursor: 'pointer' }} title="前月"><IconChevronLeft /></button>
+            <button onClick={() => setViewStart(getFirstDayOfMonth(new Date()))} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px 15px', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>今月</button>
+            <button onClick={() => setViewStart(getFirstDayOfMonth(addMonths(viewStart, 1)))} style={{ border: '1px solid #e2e8f0', background: 'white', padding: '5px', borderRadius: '5px', cursor: 'pointer' }} title="翌月"><IconChevronRight /></button>
+            <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '8px' }}>表示:</span>
+            <select
+              value={viewStart.getFullYear()}
+              onChange={(e) => setViewStart(getFirstDayOfMonth(new Date(Number(e.target.value), viewStart.getMonth(), 1)))}
+              style={{ padding: '6px 8px', borderRadius: '5px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+            >
+              {Array.from({ length: 11 }, (_, i) => 2022 + i).map((y) => (
+                <option key={y} value={y}>{y}年</option>
+              ))}
+            </select>
+            <select
+              value={viewStart.getMonth()}
+              onChange={(e) => setViewStart(getFirstDayOfMonth(new Date(viewStart.getFullYear(), Number(e.target.value), 1)))}
+              style={{ padding: '6px 8px', borderRadius: '5px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+            >
+              {[1,2,3,4,5,6,7,8,9,10,11,12].map((m) => (
+                <option key={m} value={m - 1}>{m}月</option>
+              ))}
+            </select>
           </div>
 
           <div style={{ display: 'flex', overflowX: 'auto' }}>
@@ -441,6 +491,25 @@ const App = () => {
                 />
                 <button type="submit" style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>追加する</button>
                 <button type="button" onClick={() => setIsProjectFormOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>キャンセル</button>
+              </form>
+            </div>
+          </div>
+        )}
+        {isProjectRenameOpen && (
+          <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120 }}>
+            <div style={{ backgroundColor: 'white', padding: '25px', borderRadius: '12px', width: '400px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}>
+              <h2 style={{ marginTop: 0 }}>プロジェクト名の変更</h2>
+              <form onSubmit={saveProjectRename} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <input
+                  type="text"
+                  placeholder="新しいプロジェクト名"
+                  required
+                  value={renameProjectName}
+                  onChange={(e) => setRenameProjectName(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '5px', border: '1px solid #e2e8f0' }}
+                />
+                <button type="submit" style={{ backgroundColor: '#0f766e', color: 'white', border: 'none', padding: '12px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>更新する</button>
+                <button type="button" onClick={() => setIsProjectRenameOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer' }}>キャンセル</button>
               </form>
             </div>
           </div>
