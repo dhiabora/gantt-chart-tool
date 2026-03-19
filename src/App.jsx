@@ -38,6 +38,41 @@ const getSupabaseConfigError = () => {
   return '';
 };
 
+/** localStorage バックアップ用の JSON を正規化（失敗時は null） */
+const normalizeGanttBundle = (parsed) => {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const rawProjects = parsed.projects;
+  const rawTasks = parsed.tasks;
+  if (!Array.isArray(rawProjects) || !Array.isArray(rawTasks)) return null;
+
+  const projects = rawProjects
+    .filter(Boolean)
+    .map((p) => ({ id: String(p.id ?? ''), name: String(p.name ?? '') }))
+    .filter((p) => p.id && p.name);
+  if (!projects.length) return null;
+
+  const fallbackProjectId = projects[0]?.id ?? 'p_default';
+  const desiredActiveProjectId = String(parsed?.activeProjectId ?? projects[0]?.id ?? '');
+  const activeProjectId = projects.some((p) => p.id === desiredActiveProjectId) ? desiredActiveProjectId : fallbackProjectId;
+
+  const tasks = rawTasks
+    .filter(Boolean)
+    .map((t) => ({
+      id: String(t.id ?? ''),
+      projectId: String(t.projectId ?? fallbackProjectId),
+      name: String(t.name ?? ''),
+      assignee: String(t.assignee ?? ''),
+      description: String(t.description ?? ''),
+      start: String(t.start ?? ''),
+      end: String(t.end ?? ''),
+      progress: Number.isFinite(Number(t.progress)) ? Number(parseInt(t.progress, 10) || 0) : 0,
+      color: String(t.color ?? '#3b82f6'),
+    }))
+    .filter((t) => t.id && t.projectId && t.name && t.start && t.end);
+
+  return { projects, tasks, activeProjectId };
+};
+
 const App = () => {
   const STORAGE_KEY = 'gantt_state_v1';
   const LEGACY_TASKS_KEY = 'gantt_tasks_v1';
@@ -165,12 +200,98 @@ const App = () => {
   /** 読み込み成功後のみクライアント→DB の同期を許可 */
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(() => !isSupabaseEnabled);
   const [cloudLoadError, setCloudLoadError] = useState('');
+  const [cloudSaveError, setCloudSaveError] = useState('');
+  /** 手動「保存」ボタン用の短いフィードバック文言 */
+  const [saveFeedback, setSaveFeedback] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
   const supabaseConfigError = getSupabaseConfigError();
 
   const chartRef = useRef(null);
   const dragTaskRef = useRef(null);
   const syncTimerRef = useRef(null);
   const userId = session?.user?.id ?? null;
+
+  /** 同期処理で常に最新の projects/tasks/フラグを参照する */
+  const syncStateRef = useRef({ projects: [], tasks: [], userId: null, cloudSyncEnabled: false });
+  syncStateRef.current = { projects, tasks, userId, cloudSyncEnabled };
+
+  const pushNowRef = useRef(async () => ({ ok: false, skipped: true }));
+  pushNowRef.current = async (opts = null) => {
+    if (!isSupabaseEnabled || !supabase) return { ok: false, skipped: true };
+    const base = syncStateRef.current;
+    const uid = opts?.userId ?? base.userId;
+    const allow = opts?.force ? Boolean(uid) : Boolean(uid && base.cloudSyncEnabled);
+    if (!allow) return { ok: false, reason: 'no_session_or_sync' };
+
+    const p = opts?.projects ?? base.projects;
+    const t = opts?.tasks ?? base.tasks;
+
+    const projectPayload = p.map((proj) => ({ id: proj.id, name: proj.name }));
+    const taskPayload = t.map((task) => ({
+      id: task.id,
+      project_id: task.projectId,
+      name: task.name,
+      assignee: task.assignee,
+      description: task.description ?? '',
+      start_date: task.start,
+      end_date: task.end,
+      progress: Number.parseInt(task.progress, 10) || 0,
+      color: task.color,
+    }));
+
+    const projectPayloadWithOwner = projectPayload.map((proj) => ({ ...proj, user_id: uid }));
+    const taskPayloadWithOwner = taskPayload.map((task) => ({ ...task, user_id: uid }));
+
+    const { error: pe } = await supabase.from('projects').upsert(projectPayloadWithOwner, { onConflict: 'id' });
+    const { error: te } = await supabase.from('tasks').upsert(taskPayloadWithOwner, { onConflict: 'id' });
+
+    if (pe || te) {
+      const msg = pe?.message || te?.message || 'クラウドへの保存に失敗しました。RLS・テーブル定義を確認してください。';
+      setCloudSaveError(msg);
+      return { ok: false, error: msg };
+    }
+    setCloudSaveError('');
+    return { ok: true };
+  };
+
+  const handleManualSave = async () => {
+    if (saveBusy) return;
+    setSaveBusy(true);
+    setSaveFeedback('');
+    try {
+      if (isSupabaseEnabled && supabase && userId) {
+        setSaveFeedback('保存中...');
+        if (syncTimerRef.current) {
+          clearTimeout(syncTimerRef.current);
+          syncTimerRef.current = null;
+        }
+        const r = await pushNowRef.current({ force: true, userId });
+        if (r?.ok) {
+          setSaveFeedback('クラウドに保存しました');
+          try {
+            window.localStorage.setItem(`${STORAGE_KEY}_u_${userId}`, JSON.stringify({ projects, tasks, activeProjectId }));
+          } catch {
+            /* ignore */
+          }
+        } else if (r?.skipped) {
+          setSaveFeedback('クラウド連携がオフです');
+        } else {
+          setSaveFeedback(r?.error ? `保存失敗: ${r.error}` : '保存に失敗しました');
+        }
+        return;
+      }
+
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ projects, tasks, activeProjectId }));
+        setSaveFeedback('ブラウザに保存しました');
+      } catch {
+        setSaveFeedback('ブラウザへの保存に失敗しました');
+      }
+    } finally {
+      setSaveBusy(false);
+      window.setTimeout(() => setSaveFeedback(''), 5000);
+    }
+  };
 
   const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
   const weekendBg = '#f1f5f9'; // 薄いグレー（休日が分かりやすいように）
@@ -212,6 +333,7 @@ const App = () => {
         setCloudFetchDone(false);
         setCloudSyncEnabled(false);
         setCloudLoadError('');
+        setCloudSaveError('');
       }
     });
 
@@ -229,8 +351,10 @@ const App = () => {
     setCloudFetchDone(false);
     setCloudSyncEnabled(false);
     setCloudLoadError('');
+    setCloudSaveError('');
 
     const loadFromSupabase = async () => {
+      const backupKey = `${STORAGE_KEY}_u_${userId}`;
       const { data: projectRows, error: projectError } = await supabase
         .from('projects')
         .select('id, name, created_at')
@@ -256,9 +380,37 @@ const App = () => {
       const tr = taskRows ?? [];
 
       if (!pr.length) {
-        setProjects([{ id: 'p_default', name: 'デフォルト' }]);
-        setTasks([]);
-        setActiveProjectId('p_default');
+        // DB が空のとき、直前セッションのローカルバックアップがあれば復元（早すぎるリロードで未同期だった場合の救済）
+        let recovered = false;
+        try {
+          const rawBackup = typeof window !== 'undefined' ? window.localStorage.getItem(backupKey) : null;
+          if (rawBackup) {
+            const bundle = normalizeGanttBundle(JSON.parse(rawBackup));
+            const meaningful =
+              bundle &&
+              (bundle.tasks.length > 0 ||
+                bundle.projects.length > 1 ||
+                (bundle.projects[0] && bundle.projects[0].name !== 'デフォルト'));
+            if (meaningful) {
+              setProjects(bundle.projects);
+              setTasks(bundle.tasks);
+              setActiveProjectId(bundle.activeProjectId);
+              recovered = true;
+              // 状態反映後に DB へ書き戻し
+              setTimeout(() => {
+                void pushNowRef.current({ force: true, userId, projects: bundle.projects, tasks: bundle.tasks });
+              }, 0);
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+
+        if (!recovered) {
+          setProjects([{ id: 'p_default', name: 'デフォルト' }]);
+          setTasks([]);
+          setActiveProjectId('p_default');
+        }
       } else {
         const dbProjects = pr.map((p) => ({ id: String(p.id), name: String(p.name ?? '') }));
         const dbTasks = tr.map((t) => ({
@@ -289,36 +441,51 @@ const App = () => {
     };
   }, [userId]);
 
-  // Supabaseが有効な場合、変更をDBへ同期（ドラッグ連打を考慮して少し遅延）
+  // Supabaseが有効な場合、変更をDBへ同期（短めの遅延 + タブ非表示時は即フラッシュ）
   useEffect(() => {
     if (!isSupabaseEnabled || !supabase || !userId || !cloudSyncEnabled) return;
 
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-    syncTimerRef.current = setTimeout(async () => {
-      const projectPayload = projects.map((p) => ({ id: p.id, name: p.name }));
-      const taskPayload = tasks.map((t) => ({
-        id: t.id,
-        project_id: t.projectId,
-        name: t.name,
-        assignee: t.assignee,
-        description: t.description ?? '',
-        start_date: t.start,
-        end_date: t.end,
-        progress: Number.parseInt(t.progress, 10) || 0,
-        color: t.color,
-      }));
-
-      const projectPayloadWithOwner = projectPayload.map((p) => ({ ...p, user_id: userId }));
-      const taskPayloadWithOwner = taskPayload.map((t) => ({ ...t, user_id: userId }));
-
-      await supabase.from('projects').upsert(projectPayloadWithOwner, { onConflict: 'id' });
-      await supabase.from('tasks').upsert(taskPayloadWithOwner, { onConflict: 'id' });
-    }, 700);
+    syncTimerRef.current = setTimeout(() => {
+      void pushNowRef.current();
+    }, 350);
 
     return () => {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     };
   }, [projects, tasks, userId, cloudSyncEnabled]);
+
+  // リロード直前・タブ切替で未送信の変更を送る（700ms 待ちで消える問題の対策）
+  useEffect(() => {
+    const flush = () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+      void pushNowRef.current();
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
+
+  // Supabase ログイン中: 同一ブラウザ向けバックアップ（早いリロードで DB 未反映でも復元可能）
+  useEffect(() => {
+    if (!isSupabaseEnabled || !userId || !cloudSyncEnabled) return;
+    try {
+      window.localStorage.setItem(`${STORAGE_KEY}_u_${userId}`, JSON.stringify({ projects, tasks, activeProjectId }));
+    } catch {
+      /* ignore */
+    }
+  }, [projects, tasks, activeProjectId, isSupabaseEnabled, userId, cloudSyncEnabled]);
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -623,6 +790,11 @@ const App = () => {
             同期: {cloudLoadError}（この状態では編集はローカルのみです。再読み込みするか、RLS・ネットワークを確認してください。）
           </div>
         )}
+        {cloudSaveError && (
+          <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '12px' }}>
+            保存: {cloudSaveError}
+          </div>
+        )}
         
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -665,9 +837,43 @@ const App = () => {
               </button>
             </div>
           </div>
-          <button onClick={openCreateTaskModal} style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
-            <IconPlus /> タスク追加
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                disabled={saveBusy}
+                onClick={() => void handleManualSave()}
+                title={isSupabaseEnabled && userId ? '今の内容を Supabase にすぐ書き込みます' : '今の内容をブラウザの LocalStorage に書き込みます'}
+                style={{
+                  backgroundColor: 'white',
+                  color: '#334155',
+                  border: '1px solid #cbd5e1',
+                  padding: '10px 18px',
+                  borderRadius: '8px',
+                  cursor: saveBusy ? 'wait' : 'pointer',
+                  fontWeight: 'bold',
+                  opacity: saveBusy ? 0.75 : 1,
+                }}
+              >
+                {saveBusy ? '保存中…' : '保存'}
+              </button>
+              <button onClick={openCreateTaskModal} style={{ backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <IconPlus /> タスク追加
+              </button>
+            </div>
+            {saveFeedback && (
+              <div
+                style={{
+                  fontSize: '12px',
+                  maxWidth: '280px',
+                  textAlign: 'right',
+                  color: saveFeedback.includes('失敗') || saveFeedback.includes('オフ') ? '#dc2626' : '#0f766e',
+                }}
+              >
+                {saveFeedback}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Gantt Container */}

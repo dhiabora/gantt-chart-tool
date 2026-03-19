@@ -1,0 +1,14 @@
+---
+description: コード変更後は Git push 用のターミナルコマンドを必ず案内する
+alwaysApply: true
+---
+
+# 変更後の Push 案内
+
+このリポジトリでソースコードや設定を書き換えた場合、回答の末尾に **必ず** 次を含めること（日本語でよい）。
+
+1. プロジェクトルートへの `cd`（`gantt_chart_tool`）
+2. `git status` / `git add` / `git commit` / `git push origin main` の例
+3. **`.env` をコミットに含めない** 注意（誤追加時は `git reset HEAD .env`）
+
+README の「変更を GitHub に push する」と同様のコマンドでよい。
