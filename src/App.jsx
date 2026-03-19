@@ -125,7 +125,17 @@ const App = () => {
   };
 
   // --- State ---
-  const [initialState] = useState(() => loadStateFromLocalStorage());
+  // Supabase 利用時は LocalStorage を初期ソースにしない（別ブラウザでサンプルタスクだけ見える問題を防ぐ）
+  const [initialState] = useState(() => {
+    if (isSupabaseEnabled) {
+      return {
+        projects: [{ id: 'p_default', name: 'デフォルト' }],
+        tasks: [],
+        activeProjectId: 'p_default',
+      };
+    }
+    return loadStateFromLocalStorage();
+  });
 
   const [projects, setProjects] = useState(initialState.projects);
   const [tasks, setTasks] = useState(initialState.tasks);
@@ -150,6 +160,11 @@ const App = () => {
   const [authError, setAuthError] = useState('');
   const [authInfo, setAuthInfo] = useState('');
   const [fatalError, setFatalError] = useState('');
+  /** クラウドからの初回読み込みが完了したか（ログイン直後の空状態で upsert してDBを潰さないため） */
+  const [cloudFetchDone, setCloudFetchDone] = useState(() => !isSupabaseEnabled);
+  /** 読み込み成功後のみクライアント→DB の同期を許可 */
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(() => !isSupabaseEnabled);
+  const [cloudLoadError, setCloudLoadError] = useState('');
   const supabaseConfigError = getSupabaseConfigError();
 
   const chartRef = useRef(null);
@@ -160,14 +175,15 @@ const App = () => {
   const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
   const weekendBg = '#f1f5f9'; // 薄いグレー（休日が分かりやすいように）
 
-  // プロジェクト/タスク更新のたびに LocalStorage に保存
+  // プロジェクト/タスク更新のたびに LocalStorage に保存（Supabase ログイン中はクラウドを正とするため保存しない）
   useEffect(() => {
+    if (isSupabaseEnabled && userId) return;
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ projects, tasks, activeProjectId }));
     } catch {
       // 保存失敗時は握りつぶし（ユーザー体験を壊さない）
     }
-  }, [projects, tasks, activeProjectId]);
+  }, [projects, tasks, activeProjectId, isSupabaseEnabled, userId]);
 
   // Supabase Auth セッション監視
   useEffect(() => {
@@ -193,6 +209,9 @@ const App = () => {
         setProjects([{ id: 'p_default', name: 'デフォルト' }]);
         setTasks([]);
         setActiveProjectId('p_default');
+        setCloudFetchDone(false);
+        setCloudSyncEnabled(false);
+        setCloudLoadError('');
       }
     });
 
@@ -202,11 +221,15 @@ const App = () => {
     };
   }, []);
 
-  // Supabaseが有効な場合、初回にDBの内容を読み込む
+  // Supabaseが有効な場合、初回にDBの内容を読み込む（完了まで DB への upsert は行わない）
   useEffect(() => {
     if (!isSupabaseEnabled || !supabase || !userId) return;
 
     let isMounted = true;
+    setCloudFetchDone(false);
+    setCloudSyncEnabled(false);
+    setCloudLoadError('');
+
     const loadFromSupabase = async () => {
       const { data: projectRows, error: projectError } = await supabase
         .from('projects')
@@ -220,25 +243,44 @@ const App = () => {
         .eq('user_id', userId)
         .order('created_at', { ascending: true });
 
-      if (!isMounted || projectError || taskError || !projectRows || !taskRows) return;
-      if (!projectRows.length) return;
+      if (!isMounted) return;
 
-      const dbProjects = projectRows.map((p) => ({ id: String(p.id), name: String(p.name ?? '') }));
-      const dbTasks = taskRows.map((t) => ({
-        id: String(t.id),
-        projectId: String(t.project_id),
-        name: String(t.name ?? ''),
-        assignee: String(t.assignee ?? ''),
-        description: String(t.description ?? ''),
-        start: String(t.start_date ?? ''),
-        end: String(t.end_date ?? ''),
-        progress: Number.parseInt(t.progress, 10) || 0,
-        color: String(t.color ?? '#3b82f6'),
-      }));
+      if (projectError || taskError) {
+        setCloudLoadError(projectError?.message || taskError?.message || 'クラウドからの読み込みに失敗しました。');
+        setCloudSyncEnabled(false);
+        setCloudFetchDone(true);
+        return;
+      }
 
-      setProjects(dbProjects);
-      setTasks(dbTasks);
-      setActiveProjectId((prev) => (dbProjects.some((p) => p.id === prev) ? prev : dbProjects[0].id));
+      const pr = projectRows ?? [];
+      const tr = taskRows ?? [];
+
+      if (!pr.length) {
+        setProjects([{ id: 'p_default', name: 'デフォルト' }]);
+        setTasks([]);
+        setActiveProjectId('p_default');
+      } else {
+        const dbProjects = pr.map((p) => ({ id: String(p.id), name: String(p.name ?? '') }));
+        const dbTasks = tr.map((t) => ({
+          id: String(t.id),
+          projectId: String(t.project_id),
+          name: String(t.name ?? ''),
+          assignee: String(t.assignee ?? ''),
+          description: String(t.description ?? ''),
+          start: String(t.start_date ?? ''),
+          end: String(t.end_date ?? ''),
+          progress: Number.parseInt(t.progress, 10) || 0,
+          color: String(t.color ?? '#3b82f6'),
+        }));
+
+        setProjects(dbProjects);
+        setTasks(dbTasks);
+        setActiveProjectId((prev) => (dbProjects.some((p) => p.id === prev) ? prev : dbProjects[0].id));
+      }
+
+      setCloudLoadError('');
+      setCloudSyncEnabled(true);
+      setCloudFetchDone(true);
     };
 
     loadFromSupabase();
@@ -249,7 +291,7 @@ const App = () => {
 
   // Supabaseが有効な場合、変更をDBへ同期（ドラッグ連打を考慮して少し遅延）
   useEffect(() => {
-    if (!isSupabaseEnabled || !supabase || !userId) return;
+    if (!isSupabaseEnabled || !supabase || !userId || !cloudSyncEnabled) return;
 
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(async () => {
@@ -276,7 +318,7 @@ const App = () => {
     return () => {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     };
-  }, [projects, tasks, userId]);
+  }, [projects, tasks, userId, cloudSyncEnabled]);
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -560,12 +602,25 @@ const App = () => {
     );
   }
 
+  if (isSupabaseEnabled && session && !cloudFetchDone) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', backgroundColor: '#f8fafc' }}>
+        <div style={{ color: '#64748b' }}>クラウドからデータを読み込み中...</div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif', backgroundColor: '#f8fafc', minHeight: '100vh', padding: '20px' }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
         {supabaseConfigError && (
           <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '12px' }}>
             {supabaseConfigError}
+          </div>
+        )}
+        {cloudLoadError && (
+          <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '12px' }}>
+            同期: {cloudLoadError}（この状態では編集はローカルのみです。再読み込みするか、RLS・ネットワークを確認してください。）
           </div>
         )}
         
