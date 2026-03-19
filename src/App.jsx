@@ -421,8 +421,9 @@ const App = () => {
                   {t.description && (
                     <div
                       style={{
-                        fontSize: '10px',
-                        color: '#94a3b8',
+                        fontSize: '12px',
+                        color: '#111827',
+                        fontWeight: '500',
                         marginTop: '2px',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
