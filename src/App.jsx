@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { isSupabaseEnabled, supabase } from './lib/supabaseClient';
+import { isSupabaseEnabled, supabase, supabaseConfigError } from './lib/supabaseClient';
 
 // --- Icons (Inline SVG to avoid dependency issues) ---
 const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14m-7-7v14"/></svg>;
@@ -295,6 +295,9 @@ const App = () => {
     const { error } = await supabase.auth.signUp({
       email: authEmail,
       password: authPassword,
+      options: {
+        emailRedirectTo: `${window.location.origin}/gantt-chart-tool/`,
+      },
     });
     if (error) {
       setAuthError(error.message);
@@ -552,6 +555,11 @@ const App = () => {
   return (
     <div style={{ fontFamily: 'sans-serif', backgroundColor: '#f8fafc', minHeight: '100vh', padding: '20px' }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        {supabaseConfigError && (
+          <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '12px' }}>
+            {supabaseConfigError}
+          </div>
+        )}
         
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
