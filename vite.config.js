@@ -4,6 +4,6 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // GitHub Pages はリポジトリ配下で配信されることが多いので、相対パスにしてハマりを減らす
-  base: './',
+  // GitHub Pages のリポジトリ名に合わせた公開パス
+  base: '/gantt-chart-tool/',
 })
