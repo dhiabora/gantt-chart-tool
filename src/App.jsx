@@ -142,6 +142,7 @@ const App = () => {
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authInfo, setAuthInfo] = useState('');
+  const [fatalError, setFatalError] = useState('');
 
   const chartRef = useRef(null);
   const dragTaskRef = useRef(null);
@@ -165,11 +166,18 @@ const App = () => {
     if (!isSupabaseEnabled || !supabase) return;
 
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session ?? null);
-      setAuthLoading(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return;
+        setSession(data.session ?? null);
+        setAuthLoading(false);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setFatalError(err?.message || 'Supabase認証初期化に失敗しました。');
+        setAuthLoading(false);
+      });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession ?? null);
@@ -494,6 +502,19 @@ const App = () => {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', backgroundColor: '#f8fafc' }}>
         <div style={{ color: '#64748b' }}>認証状態を確認中...</div>
+      </div>
+    );
+  }
+
+  if (fatalError) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', backgroundColor: '#f8fafc', padding: '20px' }}>
+        <div style={{ width: '100%', maxWidth: '720px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
+          <h2 style={{ marginTop: 0, color: '#b91c1c' }}>初期化エラー</h2>
+          <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', background: '#f8fafc', padding: '10px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            {fatalError}
+          </pre>
+        </div>
       </div>
     );
   }
